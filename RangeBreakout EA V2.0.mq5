@@ -60,6 +60,10 @@ input int      Slippage         = 30;      // Slippage (Points)
 input group "=== Risk Management ==="
 input double   MaxDailyLoss     = 0.0;     // Max Daily Loss (0 = disabled)
 
+input group "=== Portfolio Manager Integration ==="
+input bool     UsePortfolioManager = true;  // Respect Portfolio Manager Signals
+input string   PortfolioSignalName = "PORTFOLIO_TRADING_BLOCKED";  // Global Variable Name
+
 input group "=== Spread Filter ==="
 input bool     UseSpreadFilter  = true;    // Enable Spread Filter
 input double   MaxSpreadPercent = 0.0;     // Max Spread (% of price, 0 = auto)
@@ -483,6 +487,30 @@ bool IsMaxDailyLossReached()
 }
 
 //+------------------------------------------------------------------+
+//| Check if Portfolio Manager has blocked trading                   |
+//+------------------------------------------------------------------+
+bool IsPortfolioBlocked()
+{
+   if(!UsePortfolioManager)
+      return false;
+
+   if(GlobalVariableCheck(PortfolioSignalName))
+   {
+      double signal = GlobalVariableGet(PortfolioSignalName);
+      if(signal == 1)
+      {
+         if(LogDiagnostics)
+         {
+            Print("Trading blocked by Portfolio Manager");
+         }
+         return true;
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Check if long direction is allowed                               |
 //+------------------------------------------------------------------+
 bool IsLongAllowed()
@@ -562,6 +590,12 @@ void OnTick()
 
    // Check max daily loss
    if(IsMaxDailyLossReached())
+   {
+      return;
+   }
+
+   // Check Portfolio Manager block signal
+   if(IsPortfolioBlocked())
    {
       return;
    }

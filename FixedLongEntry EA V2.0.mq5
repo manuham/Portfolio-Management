@@ -38,6 +38,10 @@ input double   StopLossPercent = 1.0;      // Stop Loss Percentage of Market Pri
 input double   TakeProfitPercent = 2.0;    // Take Profit Percentage of Market Price
 input double   MaxDailyLoss = 0.0;         // Max Daily Loss (0 = disabled)
 
+input group "==== Portfolio Manager Integration ===="
+input bool     UsePortfolioManager = true;  // Respect Portfolio Manager Signals
+input string   PortfolioSignalName = "PORTFOLIO_TRADING_BLOCKED";  // Global Variable Name
+
 input group "==== Spread Filter ===="
 input bool     UseSpreadFilter = true;     // Enable Spread Filter
 input double   MaxSpreadPercent = 0.0;     // Max Spread (% of price, 0 = auto: 10% of SL)
@@ -755,6 +759,30 @@ bool IsMaxDailyLossReached()
 }
 
 //+------------------------------------------------------------------+
+//| Check if Portfolio Manager has blocked trading                   |
+//+------------------------------------------------------------------+
+bool IsPortfolioBlocked()
+{
+    if(!UsePortfolioManager)
+        return false;
+
+    if(GlobalVariableCheck(PortfolioSignalName))
+    {
+        double signal = GlobalVariableGet(PortfolioSignalName);
+        if(signal == 1)
+        {
+            if(LogDiagnostics)
+            {
+                Print("Trading blocked by Portfolio Manager");
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+//+------------------------------------------------------------------+
 //| Check if we should enter a trade                                 |
 //+------------------------------------------------------------------+
 bool ShouldEnterTrade(datetime currentTime)
@@ -775,6 +803,12 @@ bool ShouldEnterTrade(datetime currentTime)
 
     // Check max daily loss
     if(IsMaxDailyLossReached())
+    {
+        return false;
+    }
+
+    // Check Portfolio Manager block signal
+    if(IsPortfolioBlocked())
     {
         return false;
     }
