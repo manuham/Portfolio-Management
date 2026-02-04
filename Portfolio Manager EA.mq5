@@ -250,7 +250,9 @@ void ParseMagicNumbers()
 
    for(int i = 0; i < count; i++)
    {
-      string trimmed = StringTrimLeft(StringTrimRight(parts[i]));
+      string trimmed = parts[i];
+      StringTrimLeft(trimmed);
+      StringTrimRight(trimmed);
       if(trimmed != "")
       {
          g_magicNumbers[g_magicCount] = (ulong)StringToInteger(trimmed);
@@ -327,8 +329,11 @@ void UpdatePortfolioStats()
       double margin = 0;
 
       // Calculate margin used
-      OrderCalcMargin(m_position.PositionType() == POSITION_TYPE_BUY ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,
-                      symbol, volume, entryPrice, margin);
+      if(!OrderCalcMargin(m_position.PositionType() == POSITION_TYPE_BUY ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,
+                      symbol, volume, entryPrice, margin))
+      {
+         margin = 0;  // Default if calculation fails
+      }
 
       // Calculate heat (potential loss to SL)
       double heat = 0;
