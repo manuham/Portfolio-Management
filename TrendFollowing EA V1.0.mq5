@@ -508,7 +508,7 @@ int GetHTFTrendDirection()
    if(!UseHTFFilter)
       return 0;  // No filter
 
-   double htfFastMA[2], htfSlowMA[2];
+   double htfFastMA[], htfSlowMA[];
    ArraySetAsSeries(htfFastMA, true);
    ArraySetAsSeries(htfSlowMA, true);
 
@@ -904,7 +904,7 @@ bool ShouldCloseOnOppositeCross()
 //+------------------------------------------------------------------+
 void ApplyTrailingStop()
 {
-   double atr[3];
+   double atr[];
    ArraySetAsSeries(atr, true);
    if(CopyBuffer(g_handleATR, 0, 0, 3, atr) < 3)
       return;
