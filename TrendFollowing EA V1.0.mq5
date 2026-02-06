@@ -247,12 +247,6 @@ int OnInit()
    g_dailyStartBalance = m_account.Balance();
    g_lastDayChecked = iTime(_Symbol, PERIOD_D1, 0);
 
-   // Set arrays as series once
-   ArraySetAsSeries(g_fastMA, true);
-   ArraySetAsSeries(g_slowMA, true);
-   ArraySetAsSeries(g_adx, true);
-   ArraySetAsSeries(g_atr, true);
-
    RecoverStateOnRestart();
 
    if(ShowDashboard)
@@ -346,6 +340,11 @@ bool UpdateIndicators()
    if(CopyBuffer(g_handleSlowMA, 0, 0, 3, g_slowMA) < 3) return false;
    if(CopyBuffer(g_handleADX, 0, 0, 3, g_adx) < 3) return false;
    if(CopyBuffer(g_handleATR, 0, 0, 3, g_atr) < 3) return false;
+
+   ArraySetAsSeries(g_fastMA, true);
+   ArraySetAsSeries(g_slowMA, true);
+   ArraySetAsSeries(g_adx, true);
+   ArraySetAsSeries(g_atr, true);
 
    // Update HTF trend only when HTF bar changes
    if(UseHTFFilter)
