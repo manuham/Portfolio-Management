@@ -136,7 +136,7 @@ int            g_handleHTFFastMA;
 int            g_handleHTFSlowMA;
 
 // Cached indicator values (updated once per bar)
-double         g_fastMA[3], g_slowMA[3], g_adx[3], g_atr[3];
+double         g_fastMA[], g_slowMA[], g_adx[], g_atr[];
 int            g_htfTrend = 0;
 bool           g_indicatorsValid = false;
 
