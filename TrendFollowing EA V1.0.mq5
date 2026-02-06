@@ -2,10 +2,11 @@
 //|                                       TrendFollowing EA V1.0.mq5 |
 //|                                   Portfolio Management Suite     |
 //|         Professional Trend Following with Pullback Entry         |
+//|                          OPTIMIZED VERSION                       |
 //+------------------------------------------------------------------+
 #property copyright "Portfolio Management Suite"
 #property link      ""
-#property version   "1.00"
+#property version   "1.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -88,7 +89,7 @@ input bool              TradeMonday        = true;            // Trade on Monday
 input bool              TradeTuesday       = true;            // Trade on Tuesday
 input bool              TradeWednesday     = true;            // Trade on Wednesday
 input bool              TradeThursday      = true;            // Trade on Thursday
-input bool              TradeFriday        = true;            // Trade on Friday (until 20:00)
+input bool              TradeFriday        = true;            // Trade on Friday
 input bool              TradeSaturday      = false;           // Trade on Saturday
 
 input group "=== Daily Loss Limit ==="
@@ -134,29 +135,77 @@ int            g_handleATR;
 int            g_handleHTFFastMA;
 int            g_handleHTFSlowMA;
 
+// Cached indicator values (updated once per bar)
+double         g_fastMA[3], g_slowMA[3], g_adx[3], g_atr[3];
+int            g_htfTrend = 0;
+bool           g_indicatorsValid = false;
+
 // State tracking
 int            g_barsSinceCrossover = -1;
-int            g_lastCrossDirection = 0;  // 1 = bullish, -1 = bearish
+int            g_lastCrossDirection = 0;
 datetime       g_lastBarTime = 0;
-datetime       g_lastCrossoverBar = 0;
+datetime       g_lastHTFBarTime = 0;
 bool           g_tradeTakenThisCross = false;
 double         g_dailyStartBalance = 0;
 datetime       g_lastDayChecked = 0;
 
+// Cached position info
+int            g_openPositionCount = 0;
+ulong          g_openPositionTicket = 0;
+ENUM_POSITION_TYPE g_openPositionType;
+double         g_openPositionProfit = 0;
+double         g_openPositionVolume = 0;
+double         g_openPositionEntry = 0;
+double         g_openPositionSL = 0;
+double         g_openPositionTP = 0;
+
+// Cached time info
+bool           g_tradingAllowed = true;
+int            g_currentHour = -1;
+int            g_currentDayOfWeek = -1;
+
 // Dashboard
 string         g_dashPrefix = "TF_";
+datetime       g_lastDashboardUpdate = 0;
+
+// Pre-calculated values
+double         g_point;
+double         g_tickValue;
+double         g_tickSize;
+double         g_minLot;
+double         g_maxLot;
+double         g_lotStep;
+int            g_digits;
+bool           g_tradingDays[7];
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                    |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Initialize symbol info
    if(!m_symbol.Name(_Symbol))
    {
       Print("Failed to initialize symbol info");
       return INIT_FAILED;
    }
+
+   // Cache symbol properties
+   g_point = m_symbol.Point();
+   g_tickValue = m_symbol.TickValue();
+   g_tickSize = m_symbol.TickSize();
+   g_minLot = m_symbol.LotsMin();
+   g_maxLot = m_symbol.LotsMax();
+   g_lotStep = m_symbol.LotsStep();
+   g_digits = m_symbol.Digits();
+
+   // Pre-build trading days array
+   g_tradingDays[0] = TradeSunday;
+   g_tradingDays[1] = TradeMonday;
+   g_tradingDays[2] = TradeTuesday;
+   g_tradingDays[3] = TradeWednesday;
+   g_tradingDays[4] = TradeThursday;
+   g_tradingDays[5] = TradeFriday;
+   g_tradingDays[6] = TradeSaturday;
 
    // Setup trade object
    m_trade.SetExpertMagicNumber(MagicNumber);
@@ -180,7 +229,7 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   // Create HTF indicator handles
+   // Create HTF indicator handles only if needed
    if(UseHTFFilter)
    {
       ENUM_TIMEFRAMES htfPeriod = GetHTFPeriod();
@@ -194,27 +243,24 @@ int OnInit()
       }
    }
 
-   // Initialize daily balance
+   // Initialize
    g_dailyStartBalance = m_account.Balance();
    g_lastDayChecked = iTime(_Symbol, PERIOD_D1, 0);
 
-   // Recover state on restart
+   // Set arrays as series once
+   ArraySetAsSeries(g_fastMA, true);
+   ArraySetAsSeries(g_slowMA, true);
+   ArraySetAsSeries(g_adx, true);
+   ArraySetAsSeries(g_atr, true);
+
    RecoverStateOnRestart();
 
-   // Create dashboard
    if(ShowDashboard)
-   {
       CreateDashboard();
-   }
 
-   // Set timer for dashboard updates
-   EventSetTimer(1);
+   EventSetTimer(3);  // Dashboard update every 3 seconds
 
-   Print("TrendFollowing EA V1.0 initialized on ", _Symbol);
-   Print("Strategy: ", FastMAPeriod, "/", SlowMAPeriod, " ", GetMAMethodString(), " crossover");
-   Print("Entry Mode: ", EntryMode == ENTRY_PULLBACK ? "Pullback" : "Crossover");
-   Print("Filters: ADX=", UseADXFilter ? "ON" : "OFF", ", HTF=", UseHTFFilter ? "ON" : "OFF");
-
+   Print("TrendFollowing EA V1.0 (Optimized) initialized on ", _Symbol);
    return INIT_SUCCEEDED;
 }
 
@@ -224,19 +270,16 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-
-   // Release indicator handles
    if(g_handleFastMA != INVALID_HANDLE) IndicatorRelease(g_handleFastMA);
    if(g_handleSlowMA != INVALID_HANDLE) IndicatorRelease(g_handleSlowMA);
    if(g_handleADX != INVALID_HANDLE) IndicatorRelease(g_handleADX);
    if(g_handleATR != INVALID_HANDLE) IndicatorRelease(g_handleATR);
-   if(g_handleHTFFastMA != INVALID_HANDLE) IndicatorRelease(g_handleHTFFastMA);
-   if(g_handleHTFSlowMA != INVALID_HANDLE) IndicatorRelease(g_handleHTFSlowMA);
-
-   // Clean up dashboard
+   if(UseHTFFilter)
+   {
+      if(g_handleHTFFastMA != INVALID_HANDLE) IndicatorRelease(g_handleHTFFastMA);
+      if(g_handleHTFSlowMA != INVALID_HANDLE) IndicatorRelease(g_handleHTFSlowMA);
+   }
    DeleteDashboard();
-
-   Print("TrendFollowing EA V1.0 stopped");
 }
 
 //+------------------------------------------------------------------+
@@ -245,9 +288,7 @@ void OnDeinit(const int reason)
 void OnTimer()
 {
    if(ShowDashboard)
-   {
       UpdateDashboard();
-   }
 }
 
 //+------------------------------------------------------------------+
@@ -255,36 +296,183 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Update symbol info
-   m_symbol.RefreshRates();
+   // Update position cache on every tick (for trailing)
+   UpdatePositionCache();
 
-   // Check for new day - reset daily P/L tracking
-   CheckNewDay();
+   // Manage existing positions
+   if(g_openPositionCount > 0)
+      ManagePositions();
 
-   // Manage existing positions (trailing stop, opposite cross exit)
-   ManagePositions();
-
-   // Check if new bar
+   // Check for new bar
    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    if(currentBarTime == g_lastBarTime)
-      return;  // Same bar, no new signals
+      return;
    g_lastBarTime = currentBarTime;
+
+   // New bar processing
+   OnNewBar();
+}
+
+//+------------------------------------------------------------------+
+//| New bar processing                                                |
+//+------------------------------------------------------------------+
+void OnNewBar()
+{
+   // Update indicators once per bar
+   if(!UpdateIndicators())
+      return;
+
+   // Update time-based checks once per bar
+   UpdateTimeChecks();
 
    // Update bars since crossover
    if(g_barsSinceCrossover >= 0)
-   {
       g_barsSinceCrossover++;
-   }
 
-   // Check crossover on new bar
+   // Check for crossover
    CheckCrossover();
 
-   // Trading logic
-   if(!CanTrade())
-      return;
+   // Check for entry
+   if(g_tradingAllowed && g_openPositionCount < MaxOpenTrades && !g_tradeTakenThisCross)
+      CheckEntrySignal();
+}
 
-   // Check for entry signal
-   CheckEntrySignal();
+//+------------------------------------------------------------------+
+//| Update cached indicator values                                    |
+//+------------------------------------------------------------------+
+bool UpdateIndicators()
+{
+   if(CopyBuffer(g_handleFastMA, 0, 0, 3, g_fastMA) < 3) return false;
+   if(CopyBuffer(g_handleSlowMA, 0, 0, 3, g_slowMA) < 3) return false;
+   if(CopyBuffer(g_handleADX, 0, 0, 3, g_adx) < 3) return false;
+   if(CopyBuffer(g_handleATR, 0, 0, 3, g_atr) < 3) return false;
+
+   // Update HTF trend only when HTF bar changes
+   if(UseHTFFilter)
+   {
+      ENUM_TIMEFRAMES htfPeriod = GetHTFPeriod();
+      datetime htfBarTime = iTime(_Symbol, htfPeriod, 0);
+      if(htfBarTime != g_lastHTFBarTime)
+      {
+         g_lastHTFBarTime = htfBarTime;
+         UpdateHTFTrend();
+      }
+   }
+
+   g_indicatorsValid = true;
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Update HTF trend direction                                        |
+//+------------------------------------------------------------------+
+void UpdateHTFTrend()
+{
+   double htfFastMA[], htfSlowMA[];
+   ArraySetAsSeries(htfFastMA, true);
+   ArraySetAsSeries(htfSlowMA, true);
+
+   if(CopyBuffer(g_handleHTFFastMA, 0, 0, 2, htfFastMA) < 2 ||
+      CopyBuffer(g_handleHTFSlowMA, 0, 0, 2, htfSlowMA) < 2)
+   {
+      g_htfTrend = 0;
+      return;
+   }
+
+   g_htfTrend = (htfFastMA[0] > htfSlowMA[0]) ? 1 : -1;
+}
+
+//+------------------------------------------------------------------+
+//| Update time-based checks                                          |
+//+------------------------------------------------------------------+
+void UpdateTimeChecks()
+{
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+
+   // Check new day
+   datetime today = iTime(_Symbol, PERIOD_D1, 0);
+   if(today != g_lastDayChecked)
+   {
+      g_dailyStartBalance = m_account.Balance();
+      g_lastDayChecked = today;
+   }
+
+   // Cache current time info
+   g_currentHour = dt.hour;
+   g_currentDayOfWeek = dt.day_of_week;
+
+   // Calculate if trading is allowed
+   g_tradingAllowed = CanTradeNow();
+}
+
+//+------------------------------------------------------------------+
+//| Check if trading allowed now                                      |
+//+------------------------------------------------------------------+
+bool CanTradeNow()
+{
+   // Portfolio Manager check
+   if(UsePortfolioManager)
+   {
+      if(GlobalVariableCheck(PortfolioSignalName) && GlobalVariableGet(PortfolioSignalName) == 1)
+         return false;
+   }
+
+   // Daily loss check
+   if(UseDailyLossLimit)
+   {
+      double maxLoss = g_dailyStartBalance * MaxDailyLossPercent / 100.0;
+      if(m_account.Balance() - g_dailyStartBalance <= -maxLoss)
+         return false;
+   }
+
+   // Session check
+   if(UseSessionFilter)
+   {
+      if(g_currentHour < SessionStartHour || g_currentHour >= SessionEndHour)
+         return false;
+   }
+
+   // Day of week check
+   if(!g_tradingDays[g_currentDayOfWeek])
+      return false;
+
+   // Spread check
+   if(MaxSpreadPoints > 0 && m_symbol.Spread() > MaxSpreadPoints)
+      return false;
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Update position cache                                             |
+//+------------------------------------------------------------------+
+void UpdatePositionCache()
+{
+   g_openPositionCount = 0;
+   g_openPositionTicket = 0;
+   g_openPositionProfit = 0;
+
+   int total = PositionsTotal();
+   for(int i = total - 1; i >= 0; i--)
+   {
+      if(m_position.SelectByIndex(i))
+      {
+         if(m_position.Symbol() == _Symbol && m_position.Magic() == MagicNumber)
+         {
+            g_openPositionCount++;
+            g_openPositionTicket = m_position.Ticket();
+            g_openPositionType = m_position.PositionType();
+            g_openPositionProfit = m_position.Profit() + m_position.Swap() + m_position.Commission();
+            g_openPositionVolume = m_position.Volume();
+            g_openPositionEntry = m_position.PriceOpen();
+            g_openPositionSL = m_position.StopLoss();
+            g_openPositionTP = m_position.TakeProfit();
+            break;  // Only tracking first position for this EA
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -294,26 +482,10 @@ ENUM_MA_METHOD GetMAMethod()
 {
    switch(MAMethod)
    {
-      case MA_EMA:  return MODE_EMA;
       case MA_SMA:  return MODE_SMA;
       case MA_SMMA: return MODE_SMMA;
       case MA_LWMA: return MODE_LWMA;
       default:      return MODE_EMA;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Get MA Method string                                              |
-//+------------------------------------------------------------------+
-string GetMAMethodString()
-{
-   switch(MAMethod)
-   {
-      case MA_EMA:  return "EMA";
-      case MA_SMA:  return "SMA";
-      case MA_SMMA: return "SMMA";
-      case MA_LWMA: return "LWMA";
-      default:      return "EMA";
    }
 }
 
@@ -324,7 +496,6 @@ ENUM_TIMEFRAMES GetHTFPeriod()
 {
    switch(HTFTimeframe)
    {
-      case HTF_H4: return PERIOD_H4;
       case HTF_D1: return PERIOD_D1;
       case HTF_W1: return PERIOD_W1;
       default:     return PERIOD_H4;
@@ -332,233 +503,30 @@ ENUM_TIMEFRAMES GetHTFPeriod()
 }
 
 //+------------------------------------------------------------------+
-//| Check if trading is allowed                                       |
-//+------------------------------------------------------------------+
-bool CanTrade()
-{
-   // Check Portfolio Manager block
-   if(UsePortfolioManager && IsPortfolioBlocked())
-   {
-      if(LogDiagnostics)
-         Print("Trading blocked by Portfolio Manager");
-      return false;
-   }
-
-   // Check daily loss limit
-   if(UseDailyLossLimit && IsDailyLossLimitHit())
-   {
-      if(LogDiagnostics)
-         Print("Daily loss limit reached");
-      return false;
-   }
-
-   // Check session filter
-   if(UseSessionFilter && !IsWithinSession())
-   {
-      return false;
-   }
-
-   // Check day of week
-   if(!IsTradingDay())
-   {
-      return false;
-   }
-
-   // Check spread
-   if(MaxSpreadPoints > 0)
-   {
-      double spread = m_symbol.Spread();
-      if(spread > MaxSpreadPoints)
-      {
-         if(LogDiagnostics)
-            Print("Spread too high: ", spread);
-         return false;
-      }
-   }
-
-   // Check max open trades
-   if(CountOpenPositions() >= MaxOpenTrades)
-   {
-      return false;
-   }
-
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Check if Portfolio Manager is blocking                            |
-//+------------------------------------------------------------------+
-bool IsPortfolioBlocked()
-{
-   if(!UsePortfolioManager)
-      return false;
-
-   if(GlobalVariableCheck(PortfolioSignalName))
-   {
-      double signal = GlobalVariableGet(PortfolioSignalName);
-      return (signal == 1);
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if within trading session                                   |
-//+------------------------------------------------------------------+
-bool IsWithinSession()
-{
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-
-   if(dt.hour >= SessionStartHour && dt.hour < SessionEndHour)
-      return true;
-
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if today is a trading day                                   |
-//+------------------------------------------------------------------+
-bool IsTradingDay()
-{
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-
-   switch(dt.day_of_week)
-   {
-      case 0: return TradeSunday;
-      case 1: return TradeMonday;
-      case 2: return TradeTuesday;
-      case 3: return TradeWednesday;
-      case 4: return TradeThursday;
-      case 5: return TradeFriday;
-      case 6: return TradeSaturday;
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if daily loss limit hit                                     |
-//+------------------------------------------------------------------+
-bool IsDailyLossLimitHit()
-{
-   double currentBalance = m_account.Balance();
-   double dailyPL = currentBalance - g_dailyStartBalance;
-   double maxLoss = g_dailyStartBalance * (MaxDailyLossPercent / 100.0);
-
-   return (dailyPL <= -maxLoss);
-}
-
-//+------------------------------------------------------------------+
-//| Check for new day and reset                                       |
-//+------------------------------------------------------------------+
-void CheckNewDay()
-{
-   datetime today = iTime(_Symbol, PERIOD_D1, 0);
-   if(today != g_lastDayChecked)
-   {
-      g_dailyStartBalance = m_account.Balance();
-      g_lastDayChecked = today;
-      if(LogDiagnostics)
-         Print("New day - Reset daily balance to: ", g_dailyStartBalance);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Count open positions for this EA                                  |
-//+------------------------------------------------------------------+
-int CountOpenPositions()
-{
-   int count = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(m_position.SelectByIndex(i))
-      {
-         if(m_position.Symbol() == _Symbol && m_position.Magic() == MagicNumber)
-         {
-            count++;
-         }
-      }
-   }
-   return count;
-}
-
-//+------------------------------------------------------------------+
-//| Get indicator values                                              |
-//+------------------------------------------------------------------+
-bool GetIndicatorValues(double &fastMA[], double &slowMA[], double &adx[], double &atr[])
-{
-   ArraySetAsSeries(fastMA, true);
-   ArraySetAsSeries(slowMA, true);
-   ArraySetAsSeries(adx, true);
-   ArraySetAsSeries(atr, true);
-
-   if(CopyBuffer(g_handleFastMA, 0, 0, 3, fastMA) < 3) return false;
-   if(CopyBuffer(g_handleSlowMA, 0, 0, 3, slowMA) < 3) return false;
-   if(CopyBuffer(g_handleADX, 0, 0, 3, adx) < 3) return false;
-   if(CopyBuffer(g_handleATR, 0, 0, 3, atr) < 3) return false;
-
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Get HTF trend direction                                           |
-//+------------------------------------------------------------------+
-int GetHTFTrendDirection()
-{
-   if(!UseHTFFilter)
-      return 0;  // No filter
-
-   double htfFastMA[], htfSlowMA[];
-   ArraySetAsSeries(htfFastMA, true);
-   ArraySetAsSeries(htfSlowMA, true);
-
-   if(CopyBuffer(g_handleHTFFastMA, 0, 0, 2, htfFastMA) < 2) return 0;
-   if(CopyBuffer(g_handleHTFSlowMA, 0, 0, 2, htfSlowMA) < 2) return 0;
-
-   if(htfFastMA[0] > htfSlowMA[0])
-      return 1;   // Bullish
-   else if(htfFastMA[0] < htfSlowMA[0])
-      return -1;  // Bearish
-
-   return 0;
-}
-
-//+------------------------------------------------------------------+
 //| Check for MA crossover                                            |
 //+------------------------------------------------------------------+
 void CheckCrossover()
 {
-   double fastMA[3], slowMA[3], adx[3], atr[3];
-
-   if(!GetIndicatorValues(fastMA, slowMA, adx, atr))
-      return;
-
-   // Check for bullish crossover (fast crosses above slow)
-   if(fastMA[1] > slowMA[1] && fastMA[2] <= slowMA[2])
+   // Bullish crossover
+   if(g_fastMA[1] > g_slowMA[1] && g_fastMA[2] <= g_slowMA[2])
    {
-      if(g_lastCrossDirection != 1)  // New crossover
+      if(g_lastCrossDirection != 1)
       {
          g_lastCrossDirection = 1;
          g_barsSinceCrossover = 0;
-         g_lastCrossoverBar = iTime(_Symbol, PERIOD_CURRENT, 1);
          g_tradeTakenThisCross = false;
-
-         if(LogDiagnostics)
-            Print("Bullish crossover detected");
+         if(LogDiagnostics) Print("Bullish crossover detected");
       }
    }
-   // Check for bearish crossover (fast crosses below slow)
-   else if(fastMA[1] < slowMA[1] && fastMA[2] >= slowMA[2])
+   // Bearish crossover
+   else if(g_fastMA[1] < g_slowMA[1] && g_fastMA[2] >= g_slowMA[2])
    {
-      if(g_lastCrossDirection != -1)  // New crossover
+      if(g_lastCrossDirection != -1)
       {
          g_lastCrossDirection = -1;
          g_barsSinceCrossover = 0;
-         g_lastCrossoverBar = iTime(_Symbol, PERIOD_CURRENT, 1);
          g_tradeTakenThisCross = false;
-
-         if(LogDiagnostics)
-            Print("Bearish crossover detected");
+         if(LogDiagnostics) Print("Bearish crossover detected");
       }
    }
 }
@@ -568,278 +536,141 @@ void CheckCrossover()
 //+------------------------------------------------------------------+
 void CheckEntrySignal()
 {
-   // Already took trade for this crossover
-   if(g_tradeTakenThisCross)
-      return;
-
-   // No recent crossover
+   // Early exits
    if(g_lastCrossDirection == 0 || g_barsSinceCrossover < 0)
       return;
 
-   // Too many bars since crossover
    if(g_barsSinceCrossover > MaxBarsAfterCross)
    {
-      if(LogDiagnostics)
-         Print("Too many bars since crossover, resetting");
       g_lastCrossDirection = 0;
       g_barsSinceCrossover = -1;
       return;
    }
 
-   double fastMA[3], slowMA[3], adx[3], atr[3];
-   if(!GetIndicatorValues(fastMA, slowMA, adx, atr))
+   // ADX filter
+   if(UseADXFilter && g_adx[0] < ADXMinimum)
       return;
 
-   // Check ADX filter
-   if(UseADXFilter && adx[0] < ADXMinimum)
-   {
-      if(LogDiagnostics)
-         Print("ADX too low: ", adx[0], " < ", ADXMinimum);
-      return;
-   }
-
-   // Check HTF filter
-   int htfTrend = GetHTFTrendDirection();
-
-   // Bullish entry
+   // Direction and HTF checks
    if(g_lastCrossDirection == 1)
    {
-      // Check direction filter
-      if(TradeDirection == TRADE_SHORT_ONLY)
-         return;
-
-      // Check HTF alignment
-      if(UseHTFFilter && htfTrend == -1)
-      {
-         if(LogDiagnostics)
-            Print("HTF trend is bearish, skipping long");
-         return;
-      }
-
-      // Check entry condition
-      if(CheckBullishEntry(fastMA, slowMA, atr))
-      {
-         ExecuteBuy(atr[0]);
-      }
+      if(TradeDirection == TRADE_SHORT_ONLY) return;
+      if(UseHTFFilter && g_htfTrend == -1) return;
+      if(CheckBullishEntry())
+         ExecuteBuy();
    }
-   // Bearish entry
    else if(g_lastCrossDirection == -1)
    {
-      // Check direction filter
-      if(TradeDirection == TRADE_LONG_ONLY)
-         return;
-
-      // Check HTF alignment
-      if(UseHTFFilter && htfTrend == 1)
-      {
-         if(LogDiagnostics)
-            Print("HTF trend is bullish, skipping short");
-         return;
-      }
-
-      // Check entry condition
-      if(CheckBearishEntry(fastMA, slowMA, atr))
-      {
-         ExecuteSell(atr[0]);
-      }
+      if(TradeDirection == TRADE_LONG_ONLY) return;
+      if(UseHTFFilter && g_htfTrend == 1) return;
+      if(CheckBearishEntry())
+         ExecuteSell();
    }
 }
 
 //+------------------------------------------------------------------+
-//| Check bullish entry conditions                                    |
+//| Check bullish entry                                               |
 //+------------------------------------------------------------------+
-bool CheckBullishEntry(double &fastMA[], double &slowMA[], double &atr[])
+bool CheckBullishEntry()
 {
-   double close = iClose(_Symbol, PERIOD_CURRENT, 0);
-   double low = iLow(_Symbol, PERIOD_CURRENT, 1);
-
-   // Crossover mode - enter immediately after crossover
    if(EntryMode == ENTRY_CROSSOVER)
+      return (g_barsSinceCrossover <= 1);
+
+   // Pullback mode
+   double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+   double pullbackZone = g_fastMA[0] + (g_atr[0] * PullbackZoneATR);
+   double lowerBound = g_fastMA[0] - (g_atr[0] * 0.5);
+
+   if(close <= pullbackZone && close >= lowerBound)
    {
-      if(g_barsSinceCrossover <= 1)
+      if(!RequireBounce)
          return true;
-   }
-   // Pullback mode - wait for price to pull back to fast MA
-   else if(EntryMode == ENTRY_PULLBACK)
-   {
-      double pullbackZone = fastMA[0] + (atr[0] * PullbackZoneATR);
 
-      // Price should be near the fast MA
-      if(close <= pullbackZone && close >= fastMA[0] - (atr[0] * 0.5))
-      {
-         // If requiring bounce, check that previous bar touched/crossed MA
-         if(RequireBounce)
-         {
-            if(low <= fastMA[1] * 1.001)  // Allow small tolerance
-            {
-               if(LogDiagnostics)
-                  Print("Bullish pullback entry: price bounced from fast MA");
-               return true;
-            }
-         }
-         else
-         {
-            if(LogDiagnostics)
-               Print("Bullish pullback entry: price in zone");
-            return true;
-         }
-      }
+      double low = iLow(_Symbol, PERIOD_CURRENT, 1);
+      return (low <= g_fastMA[1] * 1.001);
    }
-
    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Check bearish entry conditions                                    |
+//| Check bearish entry                                               |
 //+------------------------------------------------------------------+
-bool CheckBearishEntry(double &fastMA[], double &slowMA[], double &atr[])
+bool CheckBearishEntry()
 {
-   double close = iClose(_Symbol, PERIOD_CURRENT, 0);
-   double high = iHigh(_Symbol, PERIOD_CURRENT, 1);
-
-   // Crossover mode - enter immediately after crossover
    if(EntryMode == ENTRY_CROSSOVER)
+      return (g_barsSinceCrossover <= 1);
+
+   // Pullback mode
+   double close = iClose(_Symbol, PERIOD_CURRENT, 0);
+   double pullbackZone = g_fastMA[0] - (g_atr[0] * PullbackZoneATR);
+   double upperBound = g_fastMA[0] + (g_atr[0] * 0.5);
+
+   if(close >= pullbackZone && close <= upperBound)
    {
-      if(g_barsSinceCrossover <= 1)
+      if(!RequireBounce)
          return true;
-   }
-   // Pullback mode - wait for price to pull back to fast MA
-   else if(EntryMode == ENTRY_PULLBACK)
-   {
-      double pullbackZone = fastMA[0] - (atr[0] * PullbackZoneATR);
 
-      // Price should be near the fast MA
-      if(close >= pullbackZone && close <= fastMA[0] + (atr[0] * 0.5))
-      {
-         // If requiring bounce, check that previous bar touched/crossed MA
-         if(RequireBounce)
-         {
-            if(high >= fastMA[1] * 0.999)  // Allow small tolerance
-            {
-               if(LogDiagnostics)
-                  Print("Bearish pullback entry: price bounced from fast MA");
-               return true;
-            }
-         }
-         else
-         {
-            if(LogDiagnostics)
-               Print("Bearish pullback entry: price in zone");
-            return true;
-         }
-      }
+      double high = iHigh(_Symbol, PERIOD_CURRENT, 1);
+      return (high >= g_fastMA[1] * 0.999);
    }
-
    return false;
 }
 
 //+------------------------------------------------------------------+
 //| Execute buy order                                                 |
 //+------------------------------------------------------------------+
-void ExecuteBuy(double atr)
+void ExecuteBuy()
 {
+   m_symbol.RefreshRates();
    double ask = m_symbol.Ask();
-   double sl = ask - (atr * ATRMultiplierSL);
-   double tp = 0;
+   double sl = NormalizeDouble(ask - (g_atr[0] * ATRMultiplierSL), g_digits);
+   double tp = ATRMultiplierTP > 0 ? NormalizeDouble(ask + (g_atr[0] * ATRMultiplierTP), g_digits) : 0;
 
-   if(ATRMultiplierTP > 0)
-   {
-      tp = ask + (atr * ATRMultiplierTP);
-   }
+   double lotSize = CalculateLotSize(ask - sl);
+   if(lotSize <= 0) return;
 
-   // Normalize prices
-   sl = NormalizeDouble(sl, m_symbol.Digits());
-   if(tp > 0) tp = NormalizeDouble(tp, m_symbol.Digits());
-
-   // Calculate position size
-   double riskAmount = m_account.Balance() * (RiskPercent / 100.0);
-   double slPoints = (ask - sl) / m_symbol.Point();
-   double lotSize = CalculateLotSize(riskAmount, slPoints);
-
-   if(lotSize <= 0)
-   {
-      Print("Invalid lot size calculated");
-      return;
-   }
-
-   // Execute trade
    if(m_trade.Buy(lotSize, _Symbol, ask, sl, tp, TradeComment))
    {
       g_tradeTakenThisCross = true;
-      Print("BUY executed: ", lotSize, " lots at ", ask, ", SL=", sl, ", TP=", tp);
-   }
-   else
-   {
-      Print("BUY failed: ", m_trade.ResultRetcodeDescription());
+      Print("BUY: ", lotSize, " lots @ ", ask, " SL=", sl, " TP=", tp);
    }
 }
 
 //+------------------------------------------------------------------+
 //| Execute sell order                                                |
 //+------------------------------------------------------------------+
-void ExecuteSell(double atr)
+void ExecuteSell()
 {
+   m_symbol.RefreshRates();
    double bid = m_symbol.Bid();
-   double sl = bid + (atr * ATRMultiplierSL);
-   double tp = 0;
+   double sl = NormalizeDouble(bid + (g_atr[0] * ATRMultiplierSL), g_digits);
+   double tp = ATRMultiplierTP > 0 ? NormalizeDouble(bid - (g_atr[0] * ATRMultiplierTP), g_digits) : 0;
 
-   if(ATRMultiplierTP > 0)
-   {
-      tp = bid - (atr * ATRMultiplierTP);
-   }
+   double lotSize = CalculateLotSize(sl - bid);
+   if(lotSize <= 0) return;
 
-   // Normalize prices
-   sl = NormalizeDouble(sl, m_symbol.Digits());
-   if(tp > 0) tp = NormalizeDouble(tp, m_symbol.Digits());
-
-   // Calculate position size
-   double riskAmount = m_account.Balance() * (RiskPercent / 100.0);
-   double slPoints = (sl - bid) / m_symbol.Point();
-   double lotSize = CalculateLotSize(riskAmount, slPoints);
-
-   if(lotSize <= 0)
-   {
-      Print("Invalid lot size calculated");
-      return;
-   }
-
-   // Execute trade
    if(m_trade.Sell(lotSize, _Symbol, bid, sl, tp, TradeComment))
    {
       g_tradeTakenThisCross = true;
-      Print("SELL executed: ", lotSize, " lots at ", bid, ", SL=", sl, ", TP=", tp);
-   }
-   else
-   {
-      Print("SELL failed: ", m_trade.ResultRetcodeDescription());
+      Print("SELL: ", lotSize, " lots @ ", bid, " SL=", sl, " TP=", tp);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Calculate lot size based on risk                                  |
+//| Calculate lot size (optimized)                                    |
 //+------------------------------------------------------------------+
-double CalculateLotSize(double riskAmount, double slPoints)
+double CalculateLotSize(double slDistance)
 {
-   double tickValue = m_symbol.TickValue();
-   double tickSize = m_symbol.TickSize();
-   double point = m_symbol.Point();
-
-   if(tickValue == 0 || tickSize == 0 || point == 0)
+   if(g_tickValue == 0 || g_tickSize == 0 || g_point == 0 || slDistance <= 0)
       return 0;
 
-   double pointValue = tickValue * (point / tickSize);
+   double riskAmount = m_account.Balance() * RiskPercent / 100.0;
+   double slPoints = slDistance / g_point;
+   double pointValue = g_tickValue * (g_point / g_tickSize);
    double lotSize = riskAmount / (slPoints * pointValue);
 
-   // Apply lot constraints
-   double minLot = m_symbol.LotsMin();
-   double maxLot = m_symbol.LotsMax();
-   double lotStep = m_symbol.LotsStep();
-
-   lotSize = MathMax(minLot, lotSize);
-   lotSize = MathMin(maxLot, lotSize);
-   lotSize = NormalizeDouble(MathFloor(lotSize / lotStep) * lotStep, 2);
-
-   return lotSize;
+   lotSize = MathMax(g_minLot, MathMin(g_maxLot, lotSize));
+   return NormalizeDouble(MathFloor(lotSize / g_lotStep) * g_lotStep, 2);
 }
 
 //+------------------------------------------------------------------+
@@ -847,149 +678,73 @@ double CalculateLotSize(double riskAmount, double slPoints)
 //+------------------------------------------------------------------+
 void ManagePositions()
 {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   if(g_openPositionTicket == 0) return;
+
+   m_symbol.RefreshRates();
+
+   // Check opposite cross exit
+   if(CloseOnOppositeCross)
    {
-      if(!m_position.SelectByIndex(i))
-         continue;
+      bool shouldClose = false;
+      if(g_openPositionType == POSITION_TYPE_BUY && g_fastMA[0] < g_slowMA[0] && g_fastMA[1] >= g_slowMA[1])
+         shouldClose = true;
+      else if(g_openPositionType == POSITION_TYPE_SELL && g_fastMA[0] > g_slowMA[0] && g_fastMA[1] <= g_slowMA[1])
+         shouldClose = true;
 
-      if(m_position.Symbol() != _Symbol || m_position.Magic() != MagicNumber)
-         continue;
-
-      // Check for opposite crossover exit
-      if(CloseOnOppositeCross)
+      if(shouldClose)
       {
-         if(ShouldCloseOnOppositeCross())
-         {
-            m_trade.PositionClose(m_position.Ticket());
-            Print("Position closed on opposite MA crossover");
-            continue;
-         }
-      }
-
-      // Apply trailing stop
-      if(UseTrailingStop)
-      {
-         ApplyTrailingStop();
+         m_trade.PositionClose(g_openPositionTicket);
+         Print("Closed on opposite crossover");
+         return;
       }
    }
+
+   // Trailing stop
+   if(UseTrailingStop)
+      ApplyTrailingStop();
 }
 
 //+------------------------------------------------------------------+
-//| Check if should close on opposite crossover                       |
-//+------------------------------------------------------------------+
-bool ShouldCloseOnOppositeCross()
-{
-   double fastMA[3], slowMA[3], adx[3], atr[3];
-   if(!GetIndicatorValues(fastMA, slowMA, adx, atr))
-      return false;
-
-   // Long position and bearish cross
-   if(m_position.PositionType() == POSITION_TYPE_BUY)
-   {
-      if(fastMA[0] < slowMA[0] && fastMA[1] >= slowMA[1])
-         return true;
-   }
-   // Short position and bullish cross
-   else if(m_position.PositionType() == POSITION_TYPE_SELL)
-   {
-      if(fastMA[0] > slowMA[0] && fastMA[1] <= slowMA[1])
-         return true;
-   }
-
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Apply trailing stop                                               |
+//| Apply trailing stop (optimized)                                   |
 //+------------------------------------------------------------------+
 void ApplyTrailingStop()
 {
-   double atr[];
-   ArraySetAsSeries(atr, true);
-   if(CopyBuffer(g_handleATR, 0, 0, 3, atr) < 3)
-      return;
+   double trailDist = g_atr[0] * TrailingATRMult;
+   double startDist = g_atr[0] * TrailingStartATR;
 
-   double entryPrice = m_position.PriceOpen();
-   double currentPrice = m_position.PositionType() == POSITION_TYPE_BUY ? m_symbol.Bid() : m_symbol.Ask();
-   double currentSL = m_position.StopLoss();
-   double trailDistance = atr[0] * TrailingATRMult;
-   double startDistance = atr[0] * TrailingStartATR;
-
-   if(m_position.PositionType() == POSITION_TYPE_BUY)
+   if(g_openPositionType == POSITION_TYPE_BUY)
    {
-      double profit = currentPrice - entryPrice;
+      double currentPrice = m_symbol.Bid();
+      double profit = currentPrice - g_openPositionEntry;
+      if(profit < startDist) return;
 
-      // Only trail after minimum profit
-      if(profit < startDistance)
-         return;
-
-      double newSL = currentPrice - trailDistance;
-      newSL = NormalizeDouble(newSL, m_symbol.Digits());
-
-      // Only move SL up, never down
-      if(newSL > currentSL + m_symbol.Point())
-      {
-         m_trade.PositionModify(m_position.Ticket(), newSL, m_position.TakeProfit());
-         if(LogDiagnostics)
-            Print("Trailing stop updated: ", newSL);
-      }
+      double newSL = NormalizeDouble(currentPrice - trailDist, g_digits);
+      if(newSL > g_openPositionSL + g_point)
+         m_trade.PositionModify(g_openPositionTicket, newSL, g_openPositionTP);
    }
-   else if(m_position.PositionType() == POSITION_TYPE_SELL)
+   else
    {
-      double profit = entryPrice - currentPrice;
+      double currentPrice = m_symbol.Ask();
+      double profit = g_openPositionEntry - currentPrice;
+      if(profit < startDist) return;
 
-      // Only trail after minimum profit
-      if(profit < startDistance)
-         return;
-
-      double newSL = currentPrice + trailDistance;
-      newSL = NormalizeDouble(newSL, m_symbol.Digits());
-
-      // Only move SL down, never up
-      if(newSL < currentSL - m_symbol.Point() || currentSL == 0)
-      {
-         m_trade.PositionModify(m_position.Ticket(), newSL, m_position.TakeProfit());
-         if(LogDiagnostics)
-            Print("Trailing stop updated: ", newSL);
-      }
+      double newSL = NormalizeDouble(currentPrice + trailDist, g_digits);
+      if(newSL < g_openPositionSL - g_point || g_openPositionSL == 0)
+         m_trade.PositionModify(g_openPositionTicket, newSL, g_openPositionTP);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Recover state on EA restart                                       |
+//| Recover state on restart                                          |
 //+------------------------------------------------------------------+
 void RecoverStateOnRestart()
 {
-   // Check if we have an open position
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   UpdatePositionCache();
+   if(g_openPositionCount > 0)
    {
-      if(m_position.SelectByIndex(i))
-      {
-         if(m_position.Symbol() == _Symbol && m_position.Magic() == MagicNumber)
-         {
-            // We have an open position, mark trade taken
-            g_tradeTakenThisCross = true;
-
-            // Determine last cross direction from position type
-            if(m_position.PositionType() == POSITION_TYPE_BUY)
-               g_lastCrossDirection = 1;
-            else
-               g_lastCrossDirection = -1;
-
-            Print("Recovered state: Found open ", (g_lastCrossDirection == 1 ? "BUY" : "SELL"), " position");
-            break;
-         }
-      }
-   }
-
-   // Get current MA state
-   double fastMA[3], slowMA[3], adx[3], atr[3];
-   if(GetIndicatorValues(fastMA, slowMA, adx, atr))
-   {
-      if(fastMA[0] > slowMA[0])
-         g_lastCrossDirection = 1;
-      else
-         g_lastCrossDirection = -1;
+      g_tradeTakenThisCross = true;
+      g_lastCrossDirection = (g_openPositionType == POSITION_TYPE_BUY) ? 1 : -1;
+      Print("Recovered: Found open ", (g_lastCrossDirection == 1 ? "BUY" : "SELL"));
    }
 }
 
@@ -999,63 +754,37 @@ void RecoverStateOnRestart()
 void CreateDashboard()
 {
    DeleteDashboard();
-
    int y = DashboardY;
-   int lineHeight = FontSize + 6;
+   int lh = FontSize + 6;
 
-   // Title
-   CreateLabel(g_dashPrefix + "Title", DashboardX, y, "═══ TREND FOLLOWING EA ═══", HeaderColor, FontSize + 2);
-   y += lineHeight + 4;
+   CreateLabel(g_dashPrefix + "Title", DashboardX, y, "═══ TREND FOLLOWING ═══", HeaderColor, FontSize + 2);
+   y += lh + 4;
 
-   // Strategy info
-   string strategyStr = IntegerToString(FastMAPeriod) + "/" + IntegerToString(SlowMAPeriod) + " " + GetMAMethodString();
-   CreateLabel(g_dashPrefix + "Strategy", DashboardX, y, "Strategy: " + strategyStr, TextColor, FontSize);
-   y += lineHeight;
+   CreateLabel(g_dashPrefix + "TrendL", DashboardX, y, "Trend:", TextColor, FontSize);
+   CreateLabel(g_dashPrefix + "TrendV", DashboardX + 70, y, "---", NeutralColor, FontSize);
+   y += lh;
 
-   CreateLabel(g_dashPrefix + "EntryMode", DashboardX, y, "Entry: " + (EntryMode == ENTRY_PULLBACK ? "Pullback" : "Crossover"), TextColor, FontSize);
-   y += lineHeight + 4;
+   if(UseHTFFilter)
+   {
+      CreateLabel(g_dashPrefix + "HTFL", DashboardX, y, "HTF:", TextColor, FontSize);
+      CreateLabel(g_dashPrefix + "HTFV", DashboardX + 70, y, "---", NeutralColor, FontSize);
+      y += lh;
+   }
 
-   // Current state
-   CreateLabel(g_dashPrefix + "TrendLabel", DashboardX, y, "Trend:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "TrendValue", DashboardX + 80, y, "---", NeutralColor, FontSize);
-   y += lineHeight;
+   CreateLabel(g_dashPrefix + "ADXL", DashboardX, y, "ADX:", TextColor, FontSize);
+   CreateLabel(g_dashPrefix + "ADXV", DashboardX + 70, y, "---", NeutralColor, FontSize);
+   y += lh;
 
-   CreateLabel(g_dashPrefix + "HTFLabel", DashboardX, y, "HTF Trend:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "HTFValue", DashboardX + 80, y, "---", NeutralColor, FontSize);
-   y += lineHeight;
+   CreateLabel(g_dashPrefix + "StatusL", DashboardX, y, "Status:", TextColor, FontSize);
+   CreateLabel(g_dashPrefix + "StatusV", DashboardX + 70, y, "Ready", NeutralColor, FontSize);
+   y += lh;
 
-   CreateLabel(g_dashPrefix + "ADXLabel", DashboardX, y, "ADX:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "ADXValue", DashboardX + 80, y, "---", NeutralColor, FontSize);
-   y += lineHeight;
+   CreateLabel(g_dashPrefix + "PosL", DashboardX, y, "Pos:", TextColor, FontSize);
+   CreateLabel(g_dashPrefix + "PosV", DashboardX + 70, y, "None", NeutralColor, FontSize);
+   y += lh;
 
-   CreateLabel(g_dashPrefix + "ATRLabel", DashboardX, y, "ATR:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "ATRValue", DashboardX + 80, y, "---", TextColor, FontSize);
-   y += lineHeight + 4;
-
-   // Signal state
-   CreateLabel(g_dashPrefix + "CrossLabel", DashboardX, y, "Last Cross:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "CrossValue", DashboardX + 80, y, "None", NeutralColor, FontSize);
-   y += lineHeight;
-
-   CreateLabel(g_dashPrefix + "BarsLabel", DashboardX, y, "Bars Ago:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "BarsValue", DashboardX + 80, y, "---", TextColor, FontSize);
-   y += lineHeight;
-
-   CreateLabel(g_dashPrefix + "StatusLabel", DashboardX, y, "Status:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "StatusValue", DashboardX + 80, y, "Ready", NeutralColor, FontSize);
-   y += lineHeight + 4;
-
-   // Position info
-   CreateLabel(g_dashPrefix + "PosLabel", DashboardX, y, "Position:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "PosValue", DashboardX + 80, y, "None", NeutralColor, FontSize);
-   y += lineHeight;
-
-   CreateLabel(g_dashPrefix + "PLLabel", DashboardX, y, "P/L:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "PLValue", DashboardX + 80, y, "$0.00", NeutralColor, FontSize);
-   y += lineHeight;
-
-   CreateLabel(g_dashPrefix + "DailyPLLabel", DashboardX, y, "Daily P/L:", TextColor, FontSize);
-   CreateLabel(g_dashPrefix + "DailyPLValue", DashboardX + 80, y, "$0.00", NeutralColor, FontSize);
+   CreateLabel(g_dashPrefix + "PLL", DashboardX, y, "P/L:", TextColor, FontSize);
+   CreateLabel(g_dashPrefix + "PLV", DashboardX + 70, y, "$0.00", NeutralColor, FontSize);
 
    ChartRedraw();
 }
@@ -1065,121 +794,41 @@ void CreateDashboard()
 //+------------------------------------------------------------------+
 void UpdateDashboard()
 {
-   double fastMA[3], slowMA[3], adx[3], atr[3];
-   if(!GetIndicatorValues(fastMA, slowMA, adx, atr))
-      return;
+   if(!g_indicatorsValid) return;
 
-   // Current trend
-   string trendStr;
-   color trendColor;
-   if(fastMA[0] > slowMA[0])
-   {
-      trendStr = "BULLISH";
-      trendColor = BullColor;
-   }
-   else
-   {
-      trendStr = "BEARISH";
-      trendColor = BearColor;
-   }
-   UpdateLabel(g_dashPrefix + "TrendValue", trendStr, trendColor);
+   // Trend
+   bool bullish = g_fastMA[0] > g_slowMA[0];
+   UpdateLabel(g_dashPrefix + "TrendV", bullish ? "BULL" : "BEAR", bullish ? BullColor : BearColor);
 
-   // HTF trend
+   // HTF
    if(UseHTFFilter)
    {
-      int htfTrend = GetHTFTrendDirection();
-      string htfStr = htfTrend == 1 ? "BULLISH" : (htfTrend == -1 ? "BEARISH" : "NEUTRAL");
-      color htfColor = htfTrend == 1 ? BullColor : (htfTrend == -1 ? BearColor : NeutralColor);
-      UpdateLabel(g_dashPrefix + "HTFValue", htfStr, htfColor);
-   }
-   else
-   {
-      UpdateLabel(g_dashPrefix + "HTFValue", "OFF", NeutralColor);
+      string htfStr = g_htfTrend == 1 ? "BULL" : (g_htfTrend == -1 ? "BEAR" : "---");
+      color htfClr = g_htfTrend == 1 ? BullColor : (g_htfTrend == -1 ? BearColor : NeutralColor);
+      UpdateLabel(g_dashPrefix + "HTFV", htfStr, htfClr);
    }
 
    // ADX
-   color adxColor = adx[0] >= ADXMinimum ? BullColor : BearColor;
-   UpdateLabel(g_dashPrefix + "ADXValue", DoubleToString(adx[0], 1), adxColor);
-
-   // ATR
-   UpdateLabel(g_dashPrefix + "ATRValue", DoubleToString(atr[0], m_symbol.Digits()));
-
-   // Last cross
-   string crossStr = g_lastCrossDirection == 1 ? "BULLISH" : (g_lastCrossDirection == -1 ? "BEARISH" : "None");
-   color crossColor = g_lastCrossDirection == 1 ? BullColor : (g_lastCrossDirection == -1 ? BearColor : NeutralColor);
-   UpdateLabel(g_dashPrefix + "CrossValue", crossStr, crossColor);
-
-   // Bars since cross
-   string barsStr = g_barsSinceCrossover >= 0 ? IntegerToString(g_barsSinceCrossover) : "---";
-   UpdateLabel(g_dashPrefix + "BarsValue", barsStr);
+   UpdateLabel(g_dashPrefix + "ADXV", DoubleToString(g_adx[0], 1), g_adx[0] >= ADXMinimum ? BullColor : BearColor);
 
    // Status
-   string statusStr;
-   color statusColor;
-   if(!CanTrade())
+   string status = g_tradingAllowed ? (g_tradeTakenThisCross ? "Taken" : "Ready") : "Blocked";
+   color statusClr = g_tradingAllowed ? (g_tradeTakenThisCross ? NeutralColor : BullColor) : BearColor;
+   UpdateLabel(g_dashPrefix + "StatusV", status, statusClr);
+
+   // Position
+   if(g_openPositionCount > 0)
    {
-      if(UsePortfolioManager && IsPortfolioBlocked())
-         statusStr = "BLOCKED";
-      else if(UseDailyLossLimit && IsDailyLossLimitHit())
-         statusStr = "DAILY LIMIT";
-      else if(!IsWithinSession())
-         statusStr = "OUT OF SESSION";
-      else
-         statusStr = "MAX TRADES";
-      statusColor = BearColor;
-   }
-   else if(g_tradeTakenThisCross)
-   {
-      statusStr = "Trade Taken";
-      statusColor = NeutralColor;
-   }
-   else if(g_barsSinceCrossover >= 0 && g_barsSinceCrossover <= MaxBarsAfterCross)
-   {
-      statusStr = "Watching...";
-      statusColor = HeaderColor;
+      string posStr = (g_openPositionType == POSITION_TYPE_BUY ? "BUY " : "SELL ") + DoubleToString(g_openPositionVolume, 2);
+      UpdateLabel(g_dashPrefix + "PosV", posStr, g_openPositionType == POSITION_TYPE_BUY ? BullColor : BearColor);
+      string plStr = (g_openPositionProfit >= 0 ? "+" : "") + DoubleToString(g_openPositionProfit, 2);
+      UpdateLabel(g_dashPrefix + "PLV", plStr, g_openPositionProfit >= 0 ? BullColor : BearColor);
    }
    else
    {
-      statusStr = "Ready";
-      statusColor = BullColor;
+      UpdateLabel(g_dashPrefix + "PosV", "None", NeutralColor);
+      UpdateLabel(g_dashPrefix + "PLV", "$0.00", NeutralColor);
    }
-   UpdateLabel(g_dashPrefix + "StatusValue", statusStr, statusColor);
-
-   // Position info
-   bool hasPosition = false;
-   double positionPL = 0;
-
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(m_position.SelectByIndex(i))
-      {
-         if(m_position.Symbol() == _Symbol && m_position.Magic() == MagicNumber)
-         {
-            hasPosition = true;
-            string posStr = (m_position.PositionType() == POSITION_TYPE_BUY ? "BUY " : "SELL ") +
-                           DoubleToString(m_position.Volume(), 2) + " lots";
-            UpdateLabel(g_dashPrefix + "PosValue", posStr, m_position.PositionType() == POSITION_TYPE_BUY ? BullColor : BearColor);
-
-            positionPL = m_position.Profit() + m_position.Swap() + m_position.Commission();
-            color plColor = positionPL >= 0 ? BullColor : BearColor;
-            string plStr = (positionPL >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(positionPL), 2);
-            UpdateLabel(g_dashPrefix + "PLValue", plStr, plColor);
-            break;
-         }
-      }
-   }
-
-   if(!hasPosition)
-   {
-      UpdateLabel(g_dashPrefix + "PosValue", "None", NeutralColor);
-      UpdateLabel(g_dashPrefix + "PLValue", "$0.00", NeutralColor);
-   }
-
-   // Daily P/L
-   double dailyPL = m_account.Balance() - g_dailyStartBalance + positionPL;
-   color dailyColor = dailyPL >= 0 ? BullColor : BearColor;
-   string dailyStr = (dailyPL >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(dailyPL), 2);
-   UpdateLabel(g_dashPrefix + "DailyPLValue", dailyStr, dailyColor);
 
    ChartRedraw();
 }
@@ -1194,16 +843,14 @@ void DeleteDashboard()
    {
       string name = ObjectName(0, i);
       if(StringFind(name, g_dashPrefix) == 0)
-      {
          ObjectDelete(0, name);
-      }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Create label helper                                               |
+//| Create label                                                      |
 //+------------------------------------------------------------------+
-void CreateLabel(string name, int x, int y, string text, color clr, int fontSize)
+void CreateLabel(string name, int x, int y, string text, color clr, int size)
 {
    ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
@@ -1211,19 +858,17 @@ void CreateLabel(string name, int x, int y, string text, color clr, int fontSize
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
    ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
 }
 
 //+------------------------------------------------------------------+
-//| Update label helper                                               |
+//| Update label                                                      |
 //+------------------------------------------------------------------+
 void UpdateLabel(string name, string text, color clr = clrNONE)
 {
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    if(clr != clrNONE)
-   {
       ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   }
 }
 //+------------------------------------------------------------------+
