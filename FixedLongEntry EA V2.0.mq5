@@ -67,12 +67,8 @@ input group "==== Dashboard Settings ===="
 input bool     ShowDashboard = true;       // Show Performance Dashboard
 input int      DashboardX = 10;            // Dashboard X Position
 input int      DashboardY = 20;            // Dashboard Y Position
-input color    DashColorBG = C'25,25,25';  // Background Color
-input color    DashColorBorder = C'60,60,60';  // Border Color
-input color    DashColorText = clrWhite;   // Text Color
-input color    DashColorLabel = clrGray;   // Label Color
-input color    DashColorProfit = clrLime;  // Profit Color
-input color    DashColorLoss = clrRed;     // Loss Color
+input int      DashboardWidth = 280;       // Dashboard Width (pixels)
+input int      DashboardHeight = 220;      // Dashboard Height (pixels)
 
 CTrade m_trade;
 CPositionInfo m_position;
@@ -503,94 +499,123 @@ void CalculateHistoricalStats()
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
-    int panelWidth = 280;
-    int panelHeight = 220;
-    int padding = 15;
-    int rowHeight = 22;
+    // Use input dimensions
+    int W = DashboardWidth;
+    int H = DashboardHeight;
+
+    // Calculate scale factor (base: 280x220)
+    double scaleW = W / 280.0;
+    double scaleH = H / 220.0;
+    double scale = MathMin(scaleW, scaleH);
+
+    // Auto-scale font sizes
+    int fontTitle = (int)MathMax(8, MathRound(11 * scale));
+    int fontSymbol = (int)MathMax(6, MathRound(8 * scale));
+    int fontBigValue = (int)MathMax(10, MathRound(18 * scale));
+    int fontMedValue = (int)MathMax(8, MathRound(14 * scale));
+    int fontValue = (int)MathMax(7, MathRound(13 * scale));
+    int fontSmallValue = (int)MathMax(6, MathRound(12 * scale));
+    int fontLabel = (int)MathMax(5, MathRound(7 * scale));
+    int fontSettings = (int)MathMax(5, MathRound(8 * scale));
+    int fontStatus = (int)MathMax(5, MathRound(7 * scale));
+    int fontStatusDot = (int)MathMax(8, MathRound(12 * scale));
+
+    // Scale padding and spacing
+    int padding = (int)MathRound(15 * scaleW);
+    int headerHeight = (int)MathRound(35 * scaleH);
 
     // Main Background
-    CreateRectangle(g_prefix + "BG", DashboardX, DashboardY, panelWidth, panelHeight,
+    CreateRectangle(g_prefix + "BG", DashboardX, DashboardY, W, H,
                    C'20,20,25', C'45,45,55');
 
     // Header Bar
-    CreateRectangle(g_prefix + "Header", DashboardX, DashboardY, panelWidth, 35,
+    CreateRectangle(g_prefix + "Header", DashboardX, DashboardY, W, headerHeight,
                    C'35,35,45', C'45,45,55');
 
     // Title
-    CreateLabel(g_prefix + "Title", DashboardX + padding, DashboardY + 8,
-               "FIXED LONG EA", clrWhite, 11, true);
-    CreateLabel(g_prefix + "Symbol", DashboardX + padding, DashboardY + 22,
-               _Symbol, C'120,120,140', 8, false);
+    int titleY1 = (int)MathRound(8 * scaleH);
+    int titleY2 = (int)MathRound(22 * scaleH);
+    CreateLabel(g_prefix + "Title", DashboardX + padding, DashboardY + titleY1,
+               "FIXED LONG EA", clrWhite, fontTitle, true);
+    CreateLabel(g_prefix + "Symbol", DashboardX + padding, DashboardY + titleY2,
+               _Symbol, C'120,120,140', fontSymbol, false);
 
     // Status indicator (right side of header)
-    CreateLabel(g_prefix + "StatusDot", DashboardX + panelWidth - 45, DashboardY + 12,
-               "●", clrGray, 12, false);
-    CreateLabel(g_prefix + "StatusText", DashboardX + panelWidth - 55, DashboardY + 24,
-               "READY", C'100,100,120', 7, false);
+    int statusX = (int)MathRound(45 * scaleW);
+    int statusTextX = (int)MathRound(55 * scaleW);
+    CreateLabel(g_prefix + "StatusDot", DashboardX + W - statusX, DashboardY + titleY1,
+               "●", clrGray, fontStatusDot, false);
+    CreateLabel(g_prefix + "StatusText", DashboardX + W - statusTextX, DashboardY + titleY2,
+               "READY", C'100,100,120', fontStatus, false);
 
     // === TODAY'S P/L - Big and prominent ===
-    int y = DashboardY + 45;
+    int y = DashboardY + (int)MathRound(45 * scaleH);
+    int valueOffset = (int)MathRound(14 * scaleH);
+
     CreateLabel(g_prefix + "LblToday", DashboardX + padding, y,
-               "TODAY", C'100,100,120', 8, false);
-    CreateLabel(g_prefix + "ValToday", DashboardX + padding, y + 14,
-               "$0.00", clrWhite, 18, true);
+               "TODAY", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValToday", DashboardX + padding, y + valueOffset,
+               "$0.00", clrWhite, fontBigValue, true);
 
     // Total P/L (right side)
-    CreateLabel(g_prefix + "LblTotal", DashboardX + panelWidth - 100, y,
-               "TOTAL", C'100,100,120', 8, false);
-    CreateLabel(g_prefix + "ValTotal", DashboardX + panelWidth - 100, y + 14,
-               "$0.00", clrWhite, 14, true);
+    int totalX = (int)MathRound(100 * scaleW);
+    CreateLabel(g_prefix + "LblTotal", DashboardX + W - totalX, y,
+               "TOTAL", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValTotal", DashboardX + W - totalX, y + valueOffset,
+               "$0.00", clrWhite, fontMedValue, true);
 
     // Divider line
-    y += 45;
-    CreateRectangle(g_prefix + "Div1", DashboardX + padding, y, panelWidth - 30, 1,
+    y += (int)MathRound(45 * scaleH);
+    CreateRectangle(g_prefix + "Div1", DashboardX + padding, y, W - padding * 2, 1,
                    C'50,50,60', C'50,50,60');
 
     // === STATS ROW ===
-    y += 12;
+    y += (int)MathRound(12 * scaleH);
+    int colSpacing = (W - padding * 2) / 3;
     int col1 = DashboardX + padding;
-    int col2 = DashboardX + padding + 85;
-    int col3 = DashboardX + padding + 170;
+    int col2 = col1 + colSpacing;
+    int col3 = col2 + colSpacing;
+    int labelValueGap = (int)MathRound(13 * scaleH);
 
     // Trades
-    CreateLabel(g_prefix + "LblTrades", col1, y, "TRADES", C'100,100,120', 7, false);
-    CreateLabel(g_prefix + "ValTrades", col1, y + 13, "0", clrWhite, 13, true);
+    CreateLabel(g_prefix + "LblTrades", col1, y, "TRADES", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValTrades", col1, y + labelValueGap, "0", clrWhite, fontValue, true);
 
     // Win Rate
-    CreateLabel(g_prefix + "LblWinRate", col2, y, "WIN RATE", C'100,100,120', 7, false);
-    CreateLabel(g_prefix + "ValWinRate", col2, y + 13, "0%", clrWhite, 13, true);
+    CreateLabel(g_prefix + "LblWinRate", col2, y, "WIN RATE", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValWinRate", col2, y + labelValueGap, "0%", clrWhite, fontValue, true);
 
     // Profit Factor
-    CreateLabel(g_prefix + "LblPF", col3, y, "PROFIT F.", C'100,100,120', 7, false);
-    CreateLabel(g_prefix + "ValPF", col3, y + 13, "-", clrWhite, 13, true);
+    CreateLabel(g_prefix + "LblPF", col3, y, "PROFIT F.", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValPF", col3, y + labelValueGap, "-", clrWhite, fontValue, true);
 
     // === WINS/LOSSES ROW ===
-    y += 38;
+    y += (int)MathRound(38 * scaleH);
 
     // Wins
-    CreateLabel(g_prefix + "LblWins", col1, y, "WINS", C'100,100,120', 7, false);
-    CreateLabel(g_prefix + "ValWins", col1, y + 13, "0", C'80,200,120', 12, true);
+    CreateLabel(g_prefix + "LblWins", col1, y, "WINS", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValWins", col1, y + labelValueGap, "0", C'80,200,120', fontSmallValue, true);
 
     // Losses
-    CreateLabel(g_prefix + "LblLosses", col2, y, "LOSSES", C'100,100,120', 7, false);
-    CreateLabel(g_prefix + "ValLosses", col2, y + 13, "0", C'220,80,80', 12, true);
+    CreateLabel(g_prefix + "LblLosses", col2, y, "LOSSES", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValLosses", col2, y + labelValueGap, "0", C'220,80,80', fontSmallValue, true);
 
     // Open Positions
-    CreateLabel(g_prefix + "LblOpen", col3, y, "OPEN", C'100,100,120', 7, false);
-    CreateLabel(g_prefix + "ValOpen", col3, y + 13, "0/" + IntegerToString(MaxPositions), clrWhite, 12, true);
+    CreateLabel(g_prefix + "LblOpen", col3, y, "OPEN", C'100,100,120', fontLabel, false);
+    CreateLabel(g_prefix + "ValOpen", col3, y + labelValueGap, "0/" + IntegerToString(MaxPositions), clrWhite, fontSmallValue, true);
 
     // Divider line
-    y += 38;
-    CreateRectangle(g_prefix + "Div2", DashboardX + padding, y, panelWidth - 30, 1,
+    y += (int)MathRound(38 * scaleH);
+    CreateRectangle(g_prefix + "Div2", DashboardX + padding, y, W - padding * 2, 1,
                    C'50,50,60', C'50,50,60');
 
     // === SETTINGS ROW ===
-    y += 8;
+    y += (int)MathRound(8 * scaleH);
     string settingsInfo = StringFormat("%02d:%02d", EntryHour, EntryMinute) +
                          "  |  SL " + DoubleToString(StopLossPercent, 1) + "%" +
                          "  |  TP " + DoubleToString(TakeProfitPercent, 1) + "%" +
                          "  |  $" + DoubleToString(RiskAmount, 0);
-    CreateLabel(g_prefix + "Settings", DashboardX + padding, y, settingsInfo, C'90,90,110', 8, false);
+    CreateLabel(g_prefix + "Settings", DashboardX + padding, y, settingsInfo, C'90,90,110', fontSettings, false);
 
     ChartRedraw();
 }
