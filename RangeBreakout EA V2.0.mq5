@@ -91,14 +91,8 @@ input group "=== Dashboard Settings ==="
 input bool     ShowDashboard       = true;       // Show Performance Dashboard
 input int      DashboardX          = 10;         // Dashboard X Position
 input int      DashboardY          = 20;         // Dashboard Y Position
-input int      DashboardWidth      = 340;        // Dashboard Width
-input int      DashboardHeight     = 95;         // Dashboard Height
-input color    DashColorBG         = C'25,25,25';    // Background Color
-input color    DashColorBorder     = C'60,60,60';    // Border Color
-input color    DashColorText       = clrWhite;       // Text Color
-input color    DashColorLabel      = clrGray;        // Label Color
-input color    DashColorProfit     = clrLime;        // Profit Color
-input color    DashColorLoss       = clrRed;         // Loss Color
+input int      DashboardWidth      = 280;        // Dashboard Width (pixels)
+input int      DashboardHeight     = 220;        // Dashboard Height (pixels)
 
 input group "=== General ==="
 input ulong    MagicNumber      = 123456;  // Magic Number
@@ -741,83 +735,122 @@ void CalculateHistoricalStats()
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
-   int panelWidth = DashboardWidth;
-   int panelHeight = DashboardHeight;
+   // Use input dimensions
+   int W = DashboardWidth;
+   int H = DashboardHeight;
 
-   // Background
-   CreateRectLabel(g_prefix + "BG", DashboardX, DashboardY, panelWidth, panelHeight, DashColorBG, DashColorBorder);
+   // Calculate scale factor (base: 280x220)
+   double scaleW = W / 280.0;
+   double scaleH = H / 220.0;
+   double scale = MathMin(scaleW, scaleH);
 
-   // Title with symbol
-   string title = "RangeBreakout - " + _Symbol;
-   CreateLabel(g_prefix + "Title", DashboardX + 8, DashboardY + 5, title, DashColorText, 9, true);
+   // Auto-scale font sizes
+   int fontTitle = (int)MathMax(8, MathRound(11 * scale));
+   int fontSymbol = (int)MathMax(6, MathRound(8 * scale));
+   int fontBigValue = (int)MathMax(10, MathRound(18 * scale));
+   int fontMedValue = (int)MathMax(8, MathRound(14 * scale));
+   int fontValue = (int)MathMax(7, MathRound(13 * scale));
+   int fontSmallValue = (int)MathMax(6, MathRound(12 * scale));
+   int fontLabel = (int)MathMax(5, MathRound(7 * scale));
+   int fontSettings = (int)MathMax(5, MathRound(8 * scale));
+   int fontStatus = (int)MathMax(5, MathRound(7 * scale));
+   int fontStatusDot = (int)MathMax(8, MathRound(12 * scale));
 
-   // Separator
-   CreateLine(g_prefix + "Sep1", DashboardX + 8, DashboardY + 22, DashboardX + panelWidth - 8, DashboardY + 22, DashColorBorder);
+   // Scale padding and spacing
+   int padding = (int)MathRound(15 * scaleW);
+   int headerHeight = (int)MathRound(35 * scaleH);
 
-   // Calculate column positions
-   int col1 = DashboardX + 8;
-   int col2 = DashboardX + (int)(panelWidth * 0.26);
-   int col3 = DashboardX + (int)(panelWidth * 0.52);
-   int col4 = DashboardX + (int)(panelWidth * 0.77);
+   // Main Background
+   CreateRectLabel(g_prefix + "BG", DashboardX, DashboardY, W, H,
+                  C'20,20,25', C'45,45,55');
 
-   // === ROW 1: Trade Stats ===
-   int y = DashboardY + 28;
+   // Header Bar
+   CreateRectLabel(g_prefix + "Header", DashboardX, DashboardY, W, headerHeight,
+                  C'35,35,45', C'45,45,55');
 
-   CreateLabel(g_prefix + "LblTrades", col1, y, "Trades:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValTrades", col1 + 42, y, "0", DashColorText, 8, false);
+   // Title
+   int titleY1 = (int)MathRound(8 * scaleH);
+   int titleY2 = (int)MathRound(22 * scaleH);
+   CreateLabel(g_prefix + "Title", DashboardX + padding, DashboardY + titleY1,
+              "RANGE BREAKOUT", clrWhite, fontTitle, true);
+   CreateLabel(g_prefix + "Symbol", DashboardX + padding, DashboardY + titleY2,
+              _Symbol, C'120,120,140', fontSymbol, false);
 
-   CreateLabel(g_prefix + "LblWins", col2, y, "W:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValWins", col2 + 18, y, "0", DashColorProfit, 8, false);
+   // Status indicator (right side of header)
+   int statusX = (int)MathRound(45 * scaleW);
+   int statusTextX = (int)MathRound(55 * scaleW);
+   CreateLabel(g_prefix + "StatusDot", DashboardX + W - statusX, DashboardY + titleY1,
+              "●", clrGray, fontStatusDot, false);
+   CreateLabel(g_prefix + "StatusText", DashboardX + W - statusTextX, DashboardY + titleY2,
+              "READY", C'100,100,120', fontStatus, false);
 
-   CreateLabel(g_prefix + "LblLosses", col2 + 40, y, "L:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValLosses", col2 + 53, y, "0", DashColorLoss, 8, false);
+   // === TODAY'S P/L - Big and prominent ===
+   int y = DashboardY + (int)MathRound(45 * scaleH);
+   int valueOffset = (int)MathRound(14 * scaleH);
 
-   CreateLabel(g_prefix + "LblWinRate", col3, y, "WinRate:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValWinRate", col3 + 50, y, "0%", DashColorText, 8, false);
+   CreateLabel(g_prefix + "LblToday", DashboardX + padding, y,
+              "TODAY", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValToday", DashboardX + padding, y + valueOffset,
+              "$0.00", clrWhite, fontBigValue, true);
 
-   CreateLabel(g_prefix + "LblPositions", col4, y, "Open:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValPositions", col4 + 35, y, "0", DashColorText, 8, false);
+   // Total P/L (right side)
+   int totalX = (int)MathRound(100 * scaleW);
+   CreateLabel(g_prefix + "LblTotal", DashboardX + W - totalX, y,
+              "TOTAL", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValTotal", DashboardX + W - totalX, y + valueOffset,
+              "$0.00", clrWhite, fontMedValue, true);
 
-   // === ROW 2: P/L Stats ===
-   y += 16;
+   // Divider line
+   y += (int)MathRound(45 * scaleH);
+   CreateRectLabel(g_prefix + "Div1", DashboardX + padding, y, W - padding * 2, 1,
+                  C'50,50,60', C'50,50,60');
 
-   CreateLabel(g_prefix + "LblNetPL", col1, y, "Net P/L:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValNetPL", col1 + 45, y, "0.00", DashColorText, 8, true);
+   // === STATS ROW ===
+   y += (int)MathRound(12 * scaleH);
+   int colSpacing = (W - padding * 2) / 3;
+   int col1 = DashboardX + padding;
+   int col2 = col1 + colSpacing;
+   int col3 = col2 + colSpacing;
+   int labelValueGap = (int)MathRound(13 * scaleH);
 
-   CreateLabel(g_prefix + "LblToday", col2 + 25, y, "Today:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValToday", col2 + 65, y, "0.00", DashColorText, 8, true);
+   // Trades
+   CreateLabel(g_prefix + "LblTrades", col1, y, "TRADES", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValTrades", col1, y + labelValueGap, "0", clrWhite, fontValue, true);
 
-   CreateLabel(g_prefix + "LblPF", col4, y, "PF:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValPF", col4 + 22, y, "0.00", DashColorText, 8, false);
+   // Win Rate
+   CreateLabel(g_prefix + "LblWinRate", col2, y, "WIN RATE", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValWinRate", col2, y + labelValueGap, "0%", clrWhite, fontValue, true);
 
-   // === ROW 3: Best/Worst ===
-   y += 16;
+   // Profit Factor
+   CreateLabel(g_prefix + "LblPF", col3, y, "PROFIT F.", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValPF", col3, y + labelValueGap, "-", clrWhite, fontValue, true);
 
-   CreateLabel(g_prefix + "LblBest", col1, y, "Best:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValBest", col1 + 32, y, "0.00", DashColorProfit, 8, false);
+   // === WINS/LOSSES ROW ===
+   y += (int)MathRound(38 * scaleH);
 
-   CreateLabel(g_prefix + "LblWorst", col2, y, "Worst:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValWorst", col2 + 38, y, "0.00", DashColorLoss, 8, false);
+   // Wins
+   CreateLabel(g_prefix + "LblWins", col1, y, "WINS", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValWins", col1, y + labelValueGap, "0", C'80,200,120', fontSmallValue, true);
 
-   CreateLabel(g_prefix + "LblAvgWin", col3, y, "AvgW:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValAvgWin", col3 + 35, y, "0.00", DashColorProfit, 8, false);
+   // Losses
+   CreateLabel(g_prefix + "LblLosses", col2, y, "LOSSES", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValLosses", col2, y + labelValueGap, "0", C'220,80,80', fontSmallValue, true);
 
-   CreateLabel(g_prefix + "LblAvgLoss", col4, y, "AvgL:", DashColorLabel, 8, false);
-   CreateLabel(g_prefix + "ValAvgLoss", col4 + 32, y, "0.00", DashColorLoss, 8, false);
+   // Open Positions
+   CreateLabel(g_prefix + "LblOpen", col3, y, "OPEN", C'100,100,120', fontLabel, false);
+   CreateLabel(g_prefix + "ValOpen", col3, y + labelValueGap, "0", clrWhite, fontSmallValue, true);
 
-   // === Bottom: Range Info ===
-   y += 18;
-   CreateLine(g_prefix + "Sep2", DashboardX + 8, y, DashboardX + panelWidth - 8, y, DashColorBorder);
-   y += 4;
+   // Divider line
+   y += (int)MathRound(38 * scaleH);
+   CreateRectLabel(g_prefix + "Div2", DashboardX + padding, y, W - padding * 2, 1,
+                  C'50,50,60', C'50,50,60');
 
-   string rangeInfo = "Range: " + StringFormat("%02d:%02d-%02d:%02d", RangeStartHour, RangeStartMinute, RangeEndHour, RangeEndMinute) +
-                      " | TP: " + DoubleToString(TPMultiple, 1) + "x" +
-                      " | Risk: " + DoubleToString(RiskAmount, 0);
-   CreateLabel(g_prefix + "RangeInfo", col1, y, rangeInfo, DashColorLabel, 7, false);
-
-   // Range status indicator
-   CreateLabel(g_prefix + "LblStatus", col4 - 10, y, "Status:", DashColorLabel, 7, false);
-   CreateLabel(g_prefix + "ValStatus", col4 + 30, y, "---", DashColorLabel, 7, false);
+   // === SETTINGS ROW ===
+   y += (int)MathRound(8 * scaleH);
+   string settingsInfo = StringFormat("%02d:%02d-%02d:%02d", RangeStartHour, RangeStartMinute, RangeEndHour, RangeEndMinute) +
+                        "  |  TP " + DoubleToString(TPMultiple, 1) + "x" +
+                        "  |  $" + DoubleToString(RiskAmount, 0);
+   CreateLabel(g_prefix + "Settings", DashboardX + padding, y, settingsInfo, C'90,90,110', fontSettings, false);
 
    ChartRedraw();
 }
@@ -833,45 +866,75 @@ void UpdateDashboard()
    double netPL = g_stats.totalProfit - g_stats.totalLoss;
    double winRate = g_stats.totalTrades > 0 ? (double)g_stats.wins / g_stats.totalTrades * 100.0 : 0;
    double profitFactor = g_stats.totalLoss > 0 ? g_stats.totalProfit / g_stats.totalLoss : 0;
-   double avgWin = g_stats.wins > 0 ? g_stats.totalProfit / g_stats.wins : 0;
-   double avgLoss = g_stats.losses > 0 ? g_stats.totalLoss / g_stats.losses : 0;
    int openPos = CountOpenPositions();
 
-   // Update values
+   // Update status indicator
+   UpdateStatusIndicator();
+
+   // Today's P/L (big display)
+   string todayStr = (g_stats.todayPL >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(g_stats.todayPL), 2);
+   ObjectSetString(0, g_prefix + "ValToday", OBJPROP_TEXT, todayStr);
+   ObjectSetInteger(0, g_prefix + "ValToday", OBJPROP_COLOR,
+                   g_stats.todayPL >= 0 ? C'80,200,120' : C'220,80,80');
+
+   // Total P/L
+   string totalStr = (netPL >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(netPL), 2);
+   ObjectSetString(0, g_prefix + "ValTotal", OBJPROP_TEXT, totalStr);
+   ObjectSetInteger(0, g_prefix + "ValTotal", OBJPROP_COLOR,
+                   netPL >= 0 ? C'80,200,120' : C'220,80,80');
+
+   // Stats row
    ObjectSetString(0, g_prefix + "ValTrades", OBJPROP_TEXT, IntegerToString(g_stats.totalTrades));
-   ObjectSetString(0, g_prefix + "ValWins", OBJPROP_TEXT, IntegerToString(g_stats.wins));
-   ObjectSetString(0, g_prefix + "ValLosses", OBJPROP_TEXT, IntegerToString(g_stats.losses));
-   ObjectSetString(0, g_prefix + "ValWinRate", OBJPROP_TEXT, DoubleToString(winRate, 1) + "%");
-   ObjectSetString(0, g_prefix + "ValPositions", OBJPROP_TEXT, IntegerToString(openPos));
-
-   // Net P/L with color
-   ObjectSetString(0, g_prefix + "ValNetPL", OBJPROP_TEXT, FormatPL(netPL));
-   ObjectSetInteger(0, g_prefix + "ValNetPL", OBJPROP_COLOR, netPL >= 0 ? DashColorProfit : DashColorLoss);
-
-   // Today's P/L with color
-   ObjectSetString(0, g_prefix + "ValToday", OBJPROP_TEXT, FormatPL(g_stats.todayPL));
-   ObjectSetInteger(0, g_prefix + "ValToday", OBJPROP_COLOR, g_stats.todayPL >= 0 ? DashColorProfit : DashColorLoss);
+   ObjectSetString(0, g_prefix + "ValWinRate", OBJPROP_TEXT, DoubleToString(winRate, 0) + "%");
+   ObjectSetInteger(0, g_prefix + "ValWinRate", OBJPROP_COLOR,
+                   winRate >= 50 ? C'80,200,120' : (winRate > 0 ? C'220,180,80' : clrWhite));
 
    // Profit Factor
-   ObjectSetString(0, g_prefix + "ValPF", OBJPROP_TEXT, profitFactor > 0 ? DoubleToString(profitFactor, 2) : "-");
-   ObjectSetInteger(0, g_prefix + "ValPF", OBJPROP_COLOR, profitFactor >= 1.0 ? DashColorProfit : DashColorLoss);
-
-   // Best/Worst trades
-   ObjectSetString(0, g_prefix + "ValBest", OBJPROP_TEXT, DoubleToString(g_stats.bestTrade, 1));
-   ObjectSetString(0, g_prefix + "ValWorst", OBJPROP_TEXT, DoubleToString(g_stats.worstTrade, 1));
-
-   // Averages
-   ObjectSetString(0, g_prefix + "ValAvgWin", OBJPROP_TEXT, DoubleToString(avgWin, 1));
-   ObjectSetString(0, g_prefix + "ValAvgLoss", OBJPROP_TEXT, DoubleToString(avgLoss, 1));
-
-   // Range status
-   string status = "---";
-   color statusColor = DashColorLabel;
-
-   if(g_rangeBuilding)
+   if(profitFactor > 0)
    {
-      status = "BUILDING";
-      statusColor = clrOrange;
+      ObjectSetString(0, g_prefix + "ValPF", OBJPROP_TEXT, DoubleToString(profitFactor, 2));
+      ObjectSetInteger(0, g_prefix + "ValPF", OBJPROP_COLOR,
+                      profitFactor >= 1.5 ? C'80,200,120' : (profitFactor >= 1.0 ? C'220,180,80' : C'220,80,80'));
+   }
+   else
+   {
+      ObjectSetString(0, g_prefix + "ValPF", OBJPROP_TEXT, "-");
+      ObjectSetInteger(0, g_prefix + "ValPF", OBJPROP_COLOR, clrWhite);
+   }
+
+   // Wins/Losses
+   ObjectSetString(0, g_prefix + "ValWins", OBJPROP_TEXT, IntegerToString(g_stats.wins));
+   ObjectSetString(0, g_prefix + "ValLosses", OBJPROP_TEXT, IntegerToString(g_stats.losses));
+
+   // Open positions
+   ObjectSetString(0, g_prefix + "ValOpen", OBJPROP_TEXT, IntegerToString(openPos));
+   ObjectSetInteger(0, g_prefix + "ValOpen", OBJPROP_COLOR, openPos > 0 ? C'100,180,255' : clrWhite);
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Update status indicator                                           |
+//+------------------------------------------------------------------+
+void UpdateStatusIndicator()
+{
+   string statusText = "READY";
+   color statusColor = C'80,200,120';  // Green
+
+   if(IsPortfolioBlocked())
+   {
+      statusText = "BLOCKED";
+      statusColor = C'220,80,80';  // Red
+   }
+   else if(IsMaxDailyLossReached())
+   {
+      statusText = "LIMIT";
+      statusColor = C'220,80,80';  // Red
+   }
+   else if(g_rangeBuilding)
+   {
+      statusText = "BUILDING";
+      statusColor = C'255,200,80';  // Yellow/Orange
    }
    else if(g_rangeComplete && !g_rangeInvalid)
    {
@@ -881,25 +944,41 @@ void UpdateDashboard()
 
       if(allDone)
       {
-         status = "DONE";
-         statusColor = DashColorLabel;
+         statusText = "DONE";
+         statusColor = C'100,180,255';  // Blue
       }
       else
       {
-         status = "TRADING";
-         statusColor = DashColorProfit;
+         statusText = "TRADING";
+         statusColor = C'80,200,120';  // Green
       }
    }
    else if(g_rangeInvalid)
    {
-      status = "INVALID";
-      statusColor = DashColorLoss;
+      statusText = "INVALID";
+      statusColor = C'220,80,80';  // Red
+   }
+   else
+   {
+      // Check if today is a trading day
+      MqlDateTime timeStruct;
+      TimeToStruct(TimeCurrent(), timeStruct);
+      if(!IsTradingDay(timeStruct.day_of_week))
+      {
+         statusText = "OFF DAY";
+         statusColor = C'150,150,150';  // Gray
+      }
+      else
+      {
+         statusText = "WAITING";
+         statusColor = C'100,180,255';  // Blue
+      }
    }
 
-   ObjectSetString(0, g_prefix + "ValStatus", OBJPROP_TEXT, status);
-   ObjectSetInteger(0, g_prefix + "ValStatus", OBJPROP_COLOR, statusColor);
-
-   ChartRedraw();
+   ObjectSetString(0, g_prefix + "StatusDot", OBJPROP_TEXT, "●");
+   ObjectSetInteger(0, g_prefix + "StatusDot", OBJPROP_COLOR, statusColor);
+   ObjectSetString(0, g_prefix + "StatusText", OBJPROP_TEXT, statusText);
+   ObjectSetInteger(0, g_prefix + "StatusText", OBJPROP_COLOR, statusColor);
 }
 
 //+------------------------------------------------------------------+
