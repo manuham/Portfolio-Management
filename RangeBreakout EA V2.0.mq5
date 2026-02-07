@@ -386,6 +386,15 @@ void OnTimer()
       CalculateHistoricalStats();
       UpdateDashboard();
    }
+
+   // Ensure range rectangle is visible (fixes sync issue between VPS and local PC)
+   if(g_rangeComplete && g_rangeHigh > 0 && g_rangeLow > 0)
+   {
+      if(ObjectFind(0, g_rectName) < 0)
+      {
+         DrawRectangle();
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
